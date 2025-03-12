@@ -577,10 +577,32 @@ class ExtrinsicCalibrator(Node):
 
 
     def broadcast_cameras_to_world(self):
+        transforms = []
         for camera in self.array_of_cameras:
             camera:Camera
             if self.map_to_cameras_transform_table[camera.camera_id] is not None:
-                self.broadcast_single_transform(f"map", camera.camera_name,  self.map_to_cameras_transform_table[camera.camera_id])
+                t = TransformStamped()
+                t.header.stamp = self.get_clock().now().to_msg()
+                t.header.frame_id = "map"
+                t.child_frame_id = camera.camera_name
+                
+                transform = self.map_to_cameras_transform_table[camera.camera_id]
+                translation = tf_transformations.translation_from_matrix(transform)
+                quaternion = tf_transformations.quaternion_from_matrix(transform)
+                
+                t.transform.translation.x = translation[0]
+                t.transform.translation.y = translation[1]
+                t.transform.translation.z = translation[2]
+                t.transform.rotation.x = quaternion[0]
+                t.transform.rotation.y = quaternion[1]
+                t.transform.rotation.z = quaternion[2]
+                t.transform.rotation.w = quaternion[3]
+                
+                transforms.append(t)
+        
+        # Broadcast all transforms at once
+        if transforms:
+            self.tf_broadcaster.sendTransform(transforms)
         return True
 
 
