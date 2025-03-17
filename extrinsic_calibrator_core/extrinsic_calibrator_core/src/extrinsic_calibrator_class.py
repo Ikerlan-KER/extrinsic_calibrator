@@ -115,6 +115,10 @@ class ExtrinsicCalibrator(Node):
             self.initiate_calibration_routine()
             return True
         else:
+            for camera in self.array_of_cameras:
+                camera:Camera
+                if camera.camera_matrix is None or camera.dist_coeffs is None:
+                    self.get_logger().warn(f"Camera {camera.camera_name} parameters not yet received. Is the camera_info topic correct?")
             self.get_logger().warn(f"Not all marker transforms gathered successfully")
             return False
 
@@ -131,13 +135,11 @@ class ExtrinsicCalibrator(Node):
             return False
         if not self.generate_reliable_transform_between_markers_table():
             return False
-        if not self.broadcast_markers_transforms():
-            return False
         if not self.generate_camera_to_marker_transform_table():
             return False
         if not self.generate_world_to_cameras_transform_table():
             return False
-        if not self.broadcast_cameras_to_world():
+        if not self.broadcast_cameras_and_markers_to_world():
             return False
         self.get_logger().info("Extrinsic calibration finished successfully.")
         self.get_logger().info("The transforms will remain alive while this Node remains too. Hit Ctrl+C to exit")
@@ -482,41 +484,6 @@ class ExtrinsicCalibrator(Node):
         reliable_marker_to_marker_transform = np.dot(stacked_identity, pseudoinverse_result)
         return reliable_marker_to_marker_transform
 
-                 
-    def broadcast_markers_transforms(self):
-        # Broadcast the transform between "marker_0" and "map"
-        origin_transform = np.eye(4)
-        self.broadcast_single_transform(f"marker_0", f"map", origin_transform)
-        
-        # Then broadcast all the transforms between the center_marker and the rest of the markers
-        for destination_marker_id in range(self.largest_marker + 1):
-            if self.reliable_transform_between_markers_table[self.center_marker][destination_marker_id] is not None:
-                self.broadcast_single_transform(f"marker_{self.center_marker}", f"marker_{destination_marker_id}", self.reliable_transform_between_markers_table[self.center_marker][destination_marker_id])
-        return True
-    
-        
-    def broadcast_single_transform(self, origin_marker, destination_marker, transform):
-        # Create a TransformStamped message
-        t = TransformStamped()
-            
-        t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = origin_marker
-        t.child_frame_id = destination_marker
-        
-        translation = tf_transformations.translation_from_matrix(transform)
-        quaternion = tf_transformations.quaternion_from_matrix(transform)
-        
-        t.transform.translation.x = translation[0]
-        t.transform.translation.y = translation[1]
-        t.transform.translation.z = translation[2]
-        
-        t.transform.rotation.x = quaternion[0]
-        t.transform.rotation.y = quaternion[1]
-        t.transform.rotation.z = quaternion[2]
-        t.transform.rotation.w = quaternion[3]
-    
-        self.tf_broadcaster.sendTransform(t)
-
 
     def generate_camera_to_marker_transform_table(self):
         # Create a table with the transforms between the cameras and the markers
@@ -576,8 +543,58 @@ class ExtrinsicCalibrator(Node):
         return reliable_camera_transform
 
 
-    def broadcast_cameras_to_world(self):
+    def broadcast_cameras_and_markers_to_world(self):
+        # Create an array of transforms to be broadcasted
         transforms = []
+        
+        # Broadcast the transform between "marker_0" and "map"
+        origin_transform = np.eye(4)
+
+        t = TransformStamped()
+            
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = "marker_0"
+        t.child_frame_id = "map"
+        
+        translation = tf_transformations.translation_from_matrix(origin_transform)
+        quaternion = tf_transformations.quaternion_from_matrix(origin_transform)
+        
+        t.transform.translation.x = translation[0]
+        t.transform.translation.y = translation[1]
+        t.transform.translation.z = translation[2]
+        
+        t.transform.rotation.x = quaternion[0]
+        t.transform.rotation.y = quaternion[1]
+        t.transform.rotation.z = quaternion[2]
+        t.transform.rotation.w = quaternion[3]
+        
+        transforms.append(t)
+        
+        # Add all the transforms between the center_marker and the rest of the markers to the array
+        for destination_marker_id in range(self.largest_marker + 1):
+            if self.reliable_transform_between_markers_table[self.center_marker][destination_marker_id] is not None:
+                t = TransformStamped()
+                t.header.stamp = self.get_clock().now().to_msg()
+                t.header.frame_id = f"marker_{self.center_marker}"
+                t.child_frame_id = f"marker_{destination_marker_id}"
+                
+                transform = self.reliable_transform_between_markers_table[self.center_marker][destination_marker_id]
+                translation = tf_transformations.translation_from_matrix(transform)
+                quaternion = tf_transformations.quaternion_from_matrix(transform)
+                
+                t.transform.translation.x = translation[0]
+                t.transform.translation.y = translation[1]
+                t.transform.translation.z = translation[2]
+                
+                t.transform.rotation.x = quaternion[0]
+                t.transform.rotation.y = quaternion[1]
+                t.transform.rotation.z = quaternion[2]
+                t.transform.rotation.w = quaternion[3]
+                
+                transforms.append(t)
+                
+                
+        # Add all the camera transforms
         for camera in self.array_of_cameras:
             camera:Camera
             if self.map_to_cameras_transform_table[camera.camera_id] is not None:
